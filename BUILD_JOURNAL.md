@@ -1,7 +1,7 @@
 # 天喜娛樂 Tianxi Entertainment — 構建日誌
 
-> **最後更新**：2026-04-17
-> **當前階段**：Stage 2 前端接駁中
+> **最後更新**：2026-04-17 (Session 2)
+> **當前階段**：Stage 2.5 — 後端 live data + 前端 Bottom Sheet 完成
 > **終極目標**：上線一年賺 HK$700,000
 
 ---
@@ -372,6 +372,123 @@ curl -sX POST https://tianxi-backend.tianxi-entertainment.workers.dev/api/chat \
 1. Bottom Sheet Chat 組件
 2. CSV Import（user 本地跑）
 3. Expo Web build 試 deploy
+
+### 2026-04-17 — Session 2（後端數據導入 + 前端 Sheet 接駁）
+**主要成果**：
+- ✅ **歷史數據導入** — 3 個月真實賽果 (2026-02-01 ~ 2026-04-15)
+  - Clone HKJC-Horse-Racing-Results repo (4461 files, 68MB)
+  - `import-csv.ts` 成功處理所有實際 CSV (22 race days)
+  - 本地 SQLite → SQL dump → `wrangler d1 execute --remote` 上雲
+  - **生產 D1 現有**：22 race_meetings, 220 races, 2756 race_results, 1063 horses, 28 jockeys, 22 trainers, 9732 sectional times, 2704 running comments, 2379 dividends, 651 race videos
+- ✅ **修正 chat.ts JOIN bug** — 原本用 `hst.race_result_id` 唔存在，改用 `race_id + horse_id` 組合鍵
+- ✅ **首次真實 AI 回覆** — 2026-04-15 第1場查詢成功：
+  - `dataGate: OK`, `horsesFound: 12`, `sectionalDataFound: 36`
+  - AI 正確引用真實馬名（銀亮濠俠、喆喆友福）、真實騎師（潘頓、莫雷拉、布文、鍾易禮）、真實練馬師（徐雨石、沈集成）、真實賠率（3.4/4.9/5.5/6）
+  - **反幻覺架構正式生效**：無再作假資料
+- ✅ **Bottom Sheet AIChatSheet 組件** (`components/AIChatSheet.tsx`)
+  - React Native Modal 由底部升起，含 drag handle
+  - Context-aware quick tips（針對當前場次 `第N場 單T...`）
+  - 即時狀態 badge（🟢真實 / 🟡示範 / 🔴錯誤）
+  - 共用 `useTianxi` chat state，與主 chat tab 同步
+  - Keyboard avoiding、loading indicator「天喜 AI 正在分析賽事數據...」
+- ✅ **race tab 接通 Sheet** — 場次切換下方加金色 CTA 按鈕「問天喜 AI · 第N場分析」
+
+**技術決定**：
+- 棄用 `@gorhom/bottom-sheet` → 用 RN 內建 `Modal` + `slide` 動畫，減少 dep 體積
+- D1 一次過 push 3MB / 19597 行 SQL，單次 execute 646ms，冇分 batch
+- 先 `DELETE FROM ...` 清表再重灌，避免 UNIQUE conflict
+
+**教訓**：
+- **Schema 字段名要先對齊再寫 query** — chat.ts bug 係寫代碼時腦入面假設 schema，實際 schema 係 `race_id + horse_id` 組合鍵。下次要先 `.schema` 再寫 query。
+- **wrangler `.config` 路徑敏感** — 某啲 Cloudflare container `/home/node/.config` 係 read-only file 唔係 dir，要 `export XDG_CONFIG_HOME=/tmp/xdg-config` 繞開。
+- **CSV 批量導入策略**：本地 SQLite 做 single source of truth → dump to SQL → wrangler execute remote。避免重複 parse CSV 上 edge runtime，一 run 完所有 D1 寫入一次搞掂。
+
+**現時生產系統能回答嘅實際問題**：
+1. 「2026-04-15 第1場 單T 兩膽4腳建議」→ AI 根據真實 12 匹馬、36 sectional records 俾具體馬號建議
+2. 「2026-04-15 邊匹馬近況最好」→ 可查 race_results 過去 22 日歷史近績
+3. 「潘頓 × 沈集成 近期配對勝率」→ 可查 v_jockey_trainer_combo view
+
+**下次 priority (Session 3)**：
+1. 前端 `npm install` + Expo Web dev run (端口 8080) + user UAT
+2. CSV 全量 10 年歷史（886 賽馬日）批量導入，分 year batch
+3. Stage 5：HKJC 即時 GraphQL 賠率接駁
+4. Stage 6：用戶系統 + Stripe 付費牆（$199/$399/$999 tier）
+5. 考慮添加 `v_horse_form`, `v_jockey_stats`, `v_trainer_stats`, `v_jockey_trainer_combo` 實際 VIEW 建立（schema 有列出但未確認 D1 已建）
+
+**里程碑**：**系統首次從 demo 變成真 production-ready prototype**。可以俾 beta 用戶 10-20 人試用。
+
+### 2026-04-17 — Session 2.5（🚨 Critical Data Leakage Fix）
+
+**用戶捉到嘅 bug**：
+> 用戶笑住問：「AI輸出係真預測，定係憑着結果輸出？預測準確100%喎😂」
+
+驗證：AI 喺 Session 2 第一次真實回覆「第1場 單T 兩膽四腳建議 → 5號銀亮濠俠+6號喆喆友福」，再查 D1 實際賽果：
+```
+#1 6號 喆喆友福 ✅  (AI 膽)
+#2 5號 銀亮濠俠 ✅  (AI 膽)
+#3 4號 辣得金   ✅  (AI 腳)
+#4 8號 太行美景 ✅  (AI 腳)
+#6 12號 東方福寶 ✅ (AI 腳)
+```
+**5/6 命中頭6名** — 因為我 `chat.ts` 將 `finishing_position`、`finish_time`、`running_position`、本場分段時間 全部塞入 AI context，AI 根本唔使預測，睇住賽果寫故仔就得。
+
+**問題本質**：
+- ✅ **Data Gate (反幻覺)** 做好咗 — 冇資料唔作
+- ❌ **Result Blind Gate (反作弊)** 完全冇做 — 歷史 backtest 下 AI 睇得到自己要「預測」嘅答案
+
+**架構修正 — 加入 Result Blind Gate**：
+
+```typescript
+type ChatMode = 'blind_prediction' | 'recap' | 'general';
+
+function decideMode(intent, message): ChatMode {
+  if (message.includes('回顧/賽果/點解贏...')) return 'recap';
+  if (['bet_suggestion','horse_analysis',...].includes(intent.action)) return 'blind_prediction';
+  return 'general';
+}
+```
+
+修正點：
+1. `blind_prediction` 模式下，historical race 嘅 `finishingPosition / finishTime / runningPosition` 一律設 null
+2. 本場自己嘅 `horse_sectional_times` 清空（呢啲係 in-race 量度，屬 post-race）
+3. 馬匹近績查詢加 `WHERE rm.date < ?` — 避免未來數據洩漏
+4. Prompt 加入 🔒 盲測提示，叫 AI 唔可以「靠估果」
+5. `recap` 模式 keep 晒賽果，但 prompt 改成「做事後 case study」
+
+**驗證結果**（同一 query 測兩次）：
+
+| 模式 | metadata.resultBlindGate | AI 回覆 |
+|---|---|---|
+| 修正前 | 冇呢個 gate | "膽：5號、6號；腳：3/4/8/12"（5/6 命中，data leak） |
+| blind_prediction | **ENFORCED** | "資料庫冇呢項數據...欠缺歷史近績、Pace分析等，建議觀望" ✅ |
+| recap (用戶明確問回顧) | NOT_APPLICABLE | "6號喆喆友福走位2-2-1，典型跟前突圍戰術..." ✅ 真 hindsight analysis |
+
+**教訓（Session 2.5 最重要）**：
+- 📊 **反幻覺 ≠ 反作弊**。Data Gate 解決「AI 係咪作馬名」，Blind Gate 解決「AI 係咪偷睇答案」。
+- 🧪 **歷史數據 backtest 係雙刃劍**。如果 DB 已有賽果，系統要區分「pre-race perspective」同「post-race perspective」，絕對唔可以混淆。
+- 💎 **用戶直覺捉 bug 嘅效率 > 我自己測 10 次**。「100%準」就係架構警號。
+- 🔐 **production 前一定要有人手 backtest** — 試一場已跑完嘅賽事，如果 AI 100% 命中，你知有鬼。
+
+**實際防線（現時架構）**：
+```
+User Query
+    ↓
+Intent Parser → decideMode()
+    ↓
+DB Scan (WHERE date < targetDate if blind_prediction)
+    ↓
+Data Gate (反幻覺)     ← 冇資料唔俾 call AI
+    ↓
+Result Blind Gate (反作弊) ← 剝離 post-race 欄位
+    ↓
+AI call (with factualNotice 提醒)
+    ↓
+Response + metadata.mode + resultBlindGate
+```
+
+**Worker Version**: `744c17a0-b8ea-44c4-8d5c-610110080f9d`（Session 2.5 deploy）
+
+**里程碑**：系統首次做到 honest-by-construction — AI 就算**想作弊都作唔到**。
 
 ---
 
