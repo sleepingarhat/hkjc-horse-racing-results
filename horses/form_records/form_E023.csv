@@ -1,0 +1,5 @@
+﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+E023,420,08,10/02/2021,跑馬地,草地,B,1200,好,3,8,66,大衛希斯,波健士,3-3/4,15,119,1 2 8,1.10.56,1199,H
+E023,363,03,20/01/2021,跑馬地,草地,C,1200,好,3,4,66,大衛希斯,潘明輝,2-1/4,29,117,2 2 3,1.09.34,1204,H1
+E023,283,08,20/12/2020,沙田,草地,C+3,1200,好,3,4,68,大衛希斯,潘頓,3-1/2,7.2,121,4 4 8,1.09.64,1215,CP-
+E023,156,10,01/11/2020,沙田,草地,A,1200,好/快,3,5,68,大衛希斯,潘頓,4-1/2,6.6,121,5 4 10,1.09.64,1197,CP1
