@@ -1,0 +1,5 @@
+﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+C126,796,DNF,05/07/2020,沙田全天候,,,1200,好,3,2,78,姚本輝,郭能,---,18,131,3 3,--,1087,--
+C126,758,08,21/06/2020,沙田,草地,A,1400,好/快,3,4,80,姚本輝,潘明輝,5-3/4,42,131,6 6 5 8,1.22.27,1098,--
+C126,709,07,31/05/2020,沙田,草地,B,1200,好,2,14,82,姚本輝,黎海榮,4,505,119,14 13 7,1.08.90,1102,--
+C126,648,10,09/05/2020,沙田,草地,C,1000,好/快,2,1,82,姚本輝,巫顯東,6-1/4,152,116,11 7 10,0.56.07,1107,--
