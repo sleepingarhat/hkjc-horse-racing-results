@@ -1,0 +1,5 @@
+﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+D320,193,14,14/11/2020,沙田,草地,C+3,1800,好,3,7,67,高伯新,黃俊,10-3/4,290,116,11 12 13 13 14,1.49.17,997,H/PC/TT
+D320,109,12,14/10/2020,跑馬地,草地,B,1800,好,3,8,69,高伯新,薛恩,7-1/2,159,125,5 5 5 5 12,1.50.93,999,H/PC/TT
+D320,016,09,09/09/2020,跑馬地,草地,B,1650,好,3,7,69,高伯新,薛恩,4-1/2,182,122,7 7 8 9,1.40.47,1010,H1/PC1/TT1
+D320,777,WV,27/06/2020,沙田,草地,B,1400,好/快,3,--,69,高伯新,楊明綸,--,--,118,--,--,--,--
