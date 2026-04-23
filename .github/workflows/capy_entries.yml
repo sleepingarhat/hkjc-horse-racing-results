@@ -1,84 +1,57 @@
-name: Capy Entries Scraper
+name: Capy Entries — Race Card (排位表)
 
-# Runs the night BEFORE each race meeting to fetch RaceCard.aspx racecards.
-# Auto-mode: HK 20:00 Mon/Tue (for Wed HV) + Sat (for Sun ST).
-# Writes entries/entries_YYYY-MM-DD.txt (Replit-legacy) + per-race CSVs (Capy-new).
+# Runs EntryList_Scraper.py to fetch HKJC's 排位表 for the next meeting.
+# Writes entries/today_entries.txt (consumed by Pool A comeback override)
+# and entries/entries_<YYYY-MM-DD>.txt (dated archive).
+#
+# Auto-mode: HK 20:00 Mon / Tue / Sat (night before each meeting).
 
 on:
   schedule:
     # HK 20:00 Mon,Tue,Sat = UTC 12:00 Mon,Tue,Sat
     - cron: '0 12 * * 1,2,6'
-  workflow_dispatch:
-    inputs:
-      date:
-        description: 'ISO date (YYYY-MM-DD) — the race day, not today'
-        required: true
-      venue:
-        description: 'Venue (ST or HV)'
-        required: true
-        default: 'ST'
-      races:
-        description: 'Race range (e.g. 1-10)'
-        required: false
-        default: '1-11'
+  workflow_dispatch: {}
 
 jobs:
-  scrape-entries:
+  entries:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: capy/scraper-v2
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Setup Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Setup ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+
+      - name: Export browser paths
+        run: |
+          echo "CHROMIUM_PATH=${{ steps.chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+          echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r scrapers_v2/requirements.txt
-
-      - name: Resolve target race date
-        id: target
-        run: |
-          if [ -n "${{ github.event.inputs.date }}" ]; then
-            echo "date=${{ github.event.inputs.date }}" >> $GITHUB_OUTPUT
-            echo "venue=${{ github.event.inputs.venue }}" >> $GITHUB_OUTPUT
-            echo "races=${{ github.event.inputs.races }}" >> $GITHUB_OUTPUT
-          else
-            # Auto: scrape tomorrow's racecard
-            HK_TOMORROW=$(TZ=Asia/Hong_Kong date -d '+1 day' +%Y-%m-%d)
-            DOW=$(TZ=Asia/Hong_Kong date -d '+1 day' +%u)
-            if [ "$DOW" = "3" ]; then
-              VENUE=HV
-            else
-              VENUE=ST
-            fi
-            echo "date=$HK_TOMORROW"  >> $GITHUB_OUTPUT
-            echo "venue=$VENUE"       >> $GITHUB_OUTPUT
-            echo "races=1-11"         >> $GITHUB_OUTPUT
-          fi
+          pip install -r requirements.txt
 
       - name: Run entries scraper
-        run: |
-          python -m scrapers_v2.orchestrator.daily.scrape_entries \
-            --date ${{ steps.target.outputs.date }} \
-            --venue ${{ steps.target.outputs.venue }} \
-            --races ${{ steps.target.outputs.races }} \
-            --rate 0.8 \
-            --log-level INFO
+        run: python EntryList_Scraper.py
 
-      - name: Commit new entries
+      - name: Push entries to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name  "Capy Scraper Bot"
-          git config --global user.email "capy-bot@noreply.github.com"
-          git add entries/
-          if git diff --cached --quiet; then
-            echo "No new entries — skipping commit"
-          else
-            git commit -m "chore(capy): entries ${{ steps.target.outputs.date }} ${{ steps.target.outputs.venue }}"
-            git push origin capy/scraper-v2
-          fi
+          python git_sync.py \
+            --message "[data][skip ci] entries $(date -u +%Y-%m-%dT%H:%MZ) via GHA"

@@ -1,28 +1,23 @@
-name: Capy Pool A — Horse Profiles + Trackwork + Injury
+name: Capy Pool B Daily — Trials + Jockeys
 
-# Pool A = horse-heavy scrapers. Runs sequentially:
-#   HorseData_Scraper.py       — profiles + pedigree + form records
-#   HorseTrackwork_Scraper.py  — morning trackwork history
-#   HorseInjury_Scraper.py     — injury/retirement status (requests-based)
-#
-# Option A cutover: cron DISABLED until first-pass completes (~4/27).
-# Until then, run via workflow_dispatch only.
+# Pool B lighter scrapers (TrialResults + JockeyData) — runs daily.
+# Total wall-clock ~20 minutes. Each scraper is idempotent / skip-existing.
 
 on:
-  # schedule:
-  #   # HK 04:00 Sunday = UTC 20:00 Saturday (enable after first-pass complete)
-  #   - cron: '0 20 * * 6'
+  schedule:
+    # HK 02:00 daily = UTC 18:00 previous day
+    - cron: '0 18 * * *'
   workflow_dispatch:
     inputs:
       skip_scrapers:
-        description: 'Comma-separated scrapers to skip (e.g. HorseTrackwork,HorseInjury)'
+        description: 'Comma-separated scrapers to skip (e.g. TrialResults,JockeyData)'
         required: false
         default: ''
 
 jobs:
-  pool-a:
+  pool-b:
     runs-on: ubuntu-latest
-    timeout-minutes: 345  # Pool A first-pass can take many hours
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,10 +48,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pool A scrapers
+      - name: Run Pool B scrapers
         run: |
           SKIP="${{ github.event.inputs.skip_scrapers }}"
-          for scraper in HorseData_Scraper.py HorseTrackwork_Scraper.py HorseInjury_Scraper.py; do
+          for scraper in TrialResults_Scraper.py JockeyData_Scraper.py; do
             short=$(echo "$scraper" | sed 's/_Scraper\.py//')
             if echo ",$SKIP," | grep -q ",$short,"; then
               echo "::group::Skipping $scraper"
@@ -69,9 +64,9 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Push Pool A data to main
+      - name: Push Pool B data to main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python git_sync.py \
-            --message "[data][skip ci] pool-a $(date -u +%Y-%m-%dT%H:%MZ) via GHA"
+            --message "[data][skip ci] pool-b $(date -u +%Y-%m-%dT%H:%MZ) via GHA"

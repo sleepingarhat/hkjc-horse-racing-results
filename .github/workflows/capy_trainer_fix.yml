@@ -1,62 +1,54 @@
-name: Capy Trainer Scraper (D1 Fix)
+name: Capy Trainer Scraper
 
-# Fixes Replit's D1 silent-fail bug (TrainerData_Scraper.py broke on SPA URL).
-# Reads existing trainers/trainer_profiles.csv for 67 trainer IDs,
-# fetches TrainerProfile.aspx + TrainerPastRec.aspx for each, writes:
-#   - trainers/trainer_profiles.csv  (14 cols, deduped — fixes 1431-row dupe bug)
-#   - trainers/records/<TID>.csv     (18 cols — new data Replit never produced)
-#
-# Runs daily HK 01:00 (after Replit's race-day pipeline on Wed/Sun nights).
+# Runs TrainerData_Scraper.py (fixes Replit's D1 silent-fail bug).
+# Writes trainers/trainer_profiles.csv + trainers/records/<TID>.csv.
 
 on:
   schedule:
-    # HK 01:00 daily = UTC 17:00 prev day
+    # HK 01:00 daily = UTC 17:00 previous day
     - cron: '0 17 * * *'
-  workflow_dispatch:
-    inputs:
-      ids:
-        description: 'Comma-separated trainer IDs (e.g. FC,MKL,PP). Blank = all from CSV.'
-        required: false
-        default: ''
+  workflow_dispatch: {}
 
 jobs:
-  scrape-trainers:
+  trainers:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: capy/scraper-v2
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Setup Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Setup ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+
+      - name: Export browser paths
+        run: |
+          echo "CHROMIUM_PATH=${{ steps.chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+          echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
+
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r scrapers_v2/requirements.txt
+          pip install -r requirements.txt
 
       - name: Run trainer scraper
-        run: |
-          if [ -n "${{ github.event.inputs.ids }}" ]; then
-            python -m scrapers_v2.orchestrator.daily.scrape_trainers \
-              --ids "${{ github.event.inputs.ids }}" \
-              --rate 0.25 --log-level INFO
-          else
-            python -m scrapers_v2.orchestrator.daily.scrape_trainers \
-              --rate 0.25 --log-level INFO
-          fi
+        run: python TrainerData_Scraper.py
 
-      - name: Commit trainer updates
+      - name: Push trainer data to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name  "Capy Scraper Bot"
-          git config --global user.email "capy-bot@noreply.github.com"
-          git add trainers/
-          if git diff --cached --quiet; then
-            echo "No trainer changes — skipping commit"
-          else
-            git commit -m "chore(capy): trainer refresh $(date -u +%Y-%m-%d)"
-            git push origin capy/scraper-v2
-          fi
+          python git_sync.py \
+            --message "[data][skip ci] trainers $(date -u +%Y-%m-%dT%H:%MZ) via GHA"
