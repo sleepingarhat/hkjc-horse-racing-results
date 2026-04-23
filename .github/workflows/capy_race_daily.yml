@@ -1,0 +1,85 @@
+name: Capy Race Day Scraper
+
+# Runs after each HKJC race meeting to backfill the 5 race-day CSVs.
+# ST meetings: Sundays ~18:00 HKT last race. HV meetings: Wednesdays ~22:30 HKT.
+# We poll daily at HK 23:30 (UTC 15:30) — if no meeting that day the orchestrator
+# fails gracefully (returns exit 2, workflow continues).
+
+on:
+  schedule:
+    # HK 23:30 daily = UTC 15:30
+    - cron: '30 15 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'ISO date (YYYY-MM-DD)'
+        required: true
+      venue:
+        description: 'Venue (ST or HV)'
+        required: true
+        default: 'ST'
+      races:
+        description: 'Race range (e.g. 1-10 or 1,3,5)'
+        required: false
+        default: '1-11'
+
+jobs:
+  scrape-race-day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: capy/scraper-v2
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scrapers_v2/requirements.txt
+
+      - name: Resolve target date + venue
+        id: target
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            echo "date=${{ github.event.inputs.date }}" >> $GITHUB_OUTPUT
+            echo "venue=${{ github.event.inputs.venue }}" >> $GITHUB_OUTPUT
+            echo "races=${{ github.event.inputs.races }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-mode: today in HK timezone
+            HK_DATE=$(TZ=Asia/Hong_Kong date +%Y-%m-%d)
+            DOW=$(TZ=Asia/Hong_Kong date +%u)  # 1=Mon … 7=Sun
+            if [ "$DOW" = "3" ]; then
+              VENUE=HV
+            else
+              VENUE=ST
+            fi
+            echo "date=$HK_DATE" >> $GITHUB_OUTPUT
+            echo "venue=$VENUE"  >> $GITHUB_OUTPUT
+            echo "races=1-11"    >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run race-day scraper
+        run: |
+          python -m scrapers_v2.orchestrator.daily.scrape_race_day \
+            --date ${{ steps.target.outputs.date }} \
+            --venue ${{ steps.target.outputs.venue }} \
+            --races ${{ steps.target.outputs.races }} \
+            --rate 0.5 \
+            --log-level INFO || echo "No meeting or bad response — skipping commit"
+
+      - name: Commit new race-day CSVs
+        run: |
+          git config --global user.name  "Capy Scraper Bot"
+          git config --global user.email "capy-bot@noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "No new data — skipping commit"
+          else
+            git commit -m "chore(capy): race day ${{ steps.target.outputs.date }} ${{ steps.target.outputs.venue }}"
+            git push origin capy/scraper-v2
+          fi
