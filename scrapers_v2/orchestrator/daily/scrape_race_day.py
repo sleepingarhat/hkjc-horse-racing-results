@@ -117,7 +117,7 @@ async def run(
     year = date_iso[:4]
     out_dir = DATA_DIR / year
 
-    async with AsyncHKJCClient(rate_per_sec=rate) as client:
+    async with AsyncHKJCClient(rate=rate) as client:
         parsed_list = await asyncio.gather(
             *[_scrape_one_race(client, date_iso, venue_code, venue_zh, n) for n in races]
         )

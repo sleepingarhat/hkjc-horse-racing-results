@@ -128,7 +128,7 @@ async def run(ids_arg: str | None, *, rate: float = 0.25) -> int:
     all_profiles: list[dict] = []
     all_records_by_id: dict[str, list[dict]] = {}
 
-    async with AsyncHKJCClient(rate_per_sec=rate) as client:
+    async with AsyncHKJCClient(rate=rate) as client:
         tasks = [_scrape_one_trainer(client, tid, name) for tid, name in trainer_ids]
         results = await asyncio.gather(*tasks)
 

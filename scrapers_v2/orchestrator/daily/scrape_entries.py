@@ -86,7 +86,7 @@ def _write_entries_txt(path: Path, horse_nos: list[str], date_iso: str, venue: s
 async def run(date_iso: str, venue: str, races: list[int], *, rate: float = 0.8) -> int:
     ENTRIES_RACES_DIR.mkdir(parents=True, exist_ok=True)
 
-    async with AsyncHKJCClient(rate_per_sec=rate) as client:
+    async with AsyncHKJCClient(rate=rate) as client:
         tasks = [_scrape_one_race(client, date_iso, venue, n) for n in races]
         results = await asyncio.gather(*tasks)
 

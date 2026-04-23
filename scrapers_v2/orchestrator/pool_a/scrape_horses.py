@@ -151,7 +151,7 @@ async def run(
     profiles: list[dict] = []
     form_success = 0
 
-    async with AsyncHKJCClient(rate_per_sec=rate) as client:
+    async with AsyncHKJCClient(rate=rate) as client:
         # Chunk to avoid memory blow-up with 5827 horses
         chunk_size = 50
         for i in range(0, len(universe), chunk_size):
