@@ -1,9 +1,12 @@
 # 天喜數據庫 · 實施計劃 & 當前狀態
 
-**最後更新:** 2026-04-24
-**版本:** Step-B+ integrity audit landed
-**下一個里程碑:** 2026-04-27 soft gate lift → 2026-05-03 earliest Replit stop
+**最後更新:** 2026-04-24 (post Replit-stop detection)
+**版本:** Step-B+ integrity audit + FULL CUTOVER
+**下一個里程碑:** Pool A 今日 kickstart backfill → Audit 7 日全綠後正式 decom Replit
 **核心原則:** **數據 100% 齊全，唔可以遺漏。**
+
+**🚨 狀態變更 (2026-04-24 09:00 UTC):** Replit VM 30-min backup cycle 喺 2026-04-23 06:25 UTC 停咗
+(>26h 靜音)。4/27 soft-cutover gate 已 lift。GHA 全面接管，正喺 backfill 現有 gap。
 
 ---
 
@@ -14,7 +17,7 @@
 | # | Workflow | Cron (HK) | Fixture Guard | 狀態 | 近 48h |
 |---|---|---|---|---|---|
 | 1 | `capy_pool_b_daily.yml` | 02:00 | – | ✅ auto | 2/2 success |
-| 2 | `capy_pool_a.yml` | 04:00（gate ≥ 4/27）| 昨日有賽 + ≥4/27 cutover | ⏸ manual-only | 0 run (intentional) |
+| 2 | `capy_pool_a.yml` | 04:00 | 昨日有賽 | ✅ auto (**gate lifted 2026-04-24**) | 1st run dispatched |
 | 3 | `capy_race_daily.yml` | 賽日 15:30/11:30 UTC | 今日有賽 | ✅ auto | 1/1 success |
 | 4 | `capy_entries.yml` | 賽前 03:00 UTC | 明日有賽 | ✅ auto | 1/1 success |
 | 5 | `capy_trainer_fix.yml` | 01:00 | 過去 2 日有賽 | ✅ auto | 2/2 success |
@@ -53,11 +56,20 @@
 
 詳情見 `audit_reports/integrity_latest.json` + `audit_reports/SUMMARY.md`
 
-### A3 · 自動化覆蓋
+### A4 · 自動化覆蓋
 
-- **當前:** 6/7 workflow 全自動（Pool A gate 住）
-- **4/27 起:** 7/7 全自動
-- **人手介入:** 零（除非 sanity dashboard 亮紅）
+- **當前:** 8/8 workflow 全自動（Pool A gate 已 lift, integrity audit 上線）
+- **人手介入:** 零（除非 sanity dashboard / audit 亮紅）
+- **Replit 角色:** ❌ OFFLINE since 2026-04-23 06:25 UTC — GHA 係 sole source
+
+### A5 · Replit VM 狀態歷史
+
+| 日期 UTC | 事件 |
+|---|---|
+| ≤2026-04-23 06:25 | 每 30 分鐘 `[data][skip ci] periodic backup` push 到 main |
+| 2026-04-23 06:25 | **最後一次 periodic backup commit** (`a871a08`) |
+| 2026-04-23 06:25 → 2026-04-24 09:00 | 靜音 26h35min |
+| 2026-04-24 09:00 | 確認停止，lift Pool A 4/27 gate |
 
 ---
 
@@ -133,22 +145,31 @@
 **Output:** `audit_reports/integrity_YYYY-MM-DD.json` + `audit_reports/SUMMARY.md`
 **Auto Issue:** Critical 會自動 open Issue 並 label `integrity`
 
-### C2 · 3-phase Soft Cutover（取代 4/27 一刀切）
+### C2 · Forced Cutover（Replit 自行停機後）
 
-| Phase | 日期 | Action | Replit VM | GHA |
-|---|---|---|---|---|
-| **0 (current)** | -2026-04-26 | Replit first-pass 跑緊（集中現役馬 E-L 代）| RUNNING | delta-only |
-| **1 (gate lift)** | 2026-04-27 | `capy_pool_a.yml` 硬 gate 自動解；GHA Pool A 日 delta 開始 | **IDLE (standby)** | Pool A auto |
-| **2 (parity obs)** | 2026-04-27 到 5/3 | 每日 audit；gap > 0 → 相應 backfill 策略 | IDLE, 隨時可喚醒 | audit + delta + backfill |
-| **3 (final gate)** | 2026-05-03 | 連續 7 日 audit 全綠？ → 收 tag `capy-handover-baseline-v2` | **STOP**（只限全綠）| full ops |
-| **4 (hard decom)** | ≥2026-06-03 | 再跑 30 日 GHA-only，零 critical → 刪 Replit GH_TOKEN | DELETED | sole |
+**原計劃**是 3-phase soft cutover：Phase 1 (4/27 gate lift) → Phase 2 (parity obs) → Phase 3 (5/3
+earliest stop)。**事實**是 Replit VM 喺 4/23 已經自己停，28 小時後先發現，令 Phase 0-1
+整個 overlap window 消失。
 
-**停機條件 (必須同時滿足):**
-1. `integrity_latest.json`: `overall_severity == "ok"` 連續 7 日
-2. `critical_gap_count == 0` 連續 7 日
-3. 5/3 前發生過至少 1 個賽日，賽後 audit 通過
+| Phase | 狀態 | Replit | GHA |
+|---|---|---|---|
+| ~~0 (Replit first-pass)~~ | **中斷** — Replit 4/23 06:25 UTC 停 | OFFLINE | delta-only |
+| 1 (gate lift) | ✅ **完成 4/24** — 比原訂提前 3 日 | OFFLINE | Pool A auto + backfill dispatch |
+| 2 (GHA sole ops) | ✅ **當前** — GHA 係唯一 data source | OFFLINE | all workflows auto |
+| 3 (audit parity) | ⏳ 每日 audit 追蹤 gap 下降 → 0 | OFFLINE | 2026-04-24 baseline 2,587 critical |
+| 4 (decom) | ⏳ Audit 7 日連續全綠 → revoke token → archive → delete | (retire) | sole |
 
-**任何一條 fail → Replit VM 唔停**。推遲 7 日再重審。
+**當前 GHA 已執行 backfill (2026-04-24 09:00 UTC dispatched):**
+- `capy_pool_a.yml` force=true → 跑 HorseData + Trackwork + Injury（修 1,268 missing horse profiles + form_records）
+- `capy_race_daily.yml` date=2025-08-07,08-10,08-14,08-17,08-21,08-24,08-28,09-24,2026-04-19,2026-04-22 → 修 50 race artefact
+- `capy_trainer_fix.yml` → 修 67 trainer records（schedule cron 都會自動跑，提前 dispatch 加速）
+
+**Audit green 判斷:**
+- `integrity_latest.json`: `overall_severity == "ok"` 連續 7 日
+- `critical_gap_count == 0` 連續 7 日
+- 橫跨至少 1 個 race day（cadence 校驗）
+
+**任何一條 fail → decom 推遲 7 日再審**。（不過而家冇 VM 可停 — 已經停咗，只係未正式「退役」）
 
 ### C3 · Gap-fill backfill 策略 (by severity + size)
 
@@ -160,13 +181,23 @@
 | 501-2000 | Dispatch `capy_backfill_gaplist.yml`（feed 具體 horse_no list）| 手動觸發 |
 | > 2000 | **喚醒 Replit VM 跑特定 gap-list**，之後 re-audit | 手動 |
 
-### C4 · Replit-side 退場（嚴格 gated）
+### C4 · Replit-side 退場（修訂版：VM 已停）
 
-- [ ] **必要前提:** C2 Phase 3 完成 (audit 7 日全綠)
-- [ ] Phase A: Replit Deployment → Stop（但 project 保留）
-- [ ] Phase B (≥ Stop 後 7 日): Revoke Replit-side `GH_TOKEN`
-- [ ] Phase C (≥ Stop 後 30 日 + GHA 全綠): Archive Replit project（保留 history）
-- [ ] Phase D (≥ Stop 後 90 日 + 兩個完整 season): Delete Replit project
+**Phase A (已發生, 2026-04-23 06:25 UTC):** Replit Deployment 已停機（機制未明 — 可能 timeout、
+quota、或手動停）。
+
+剩低步驟：
+
+- [ ] **必要前提:** Audit 連續 7 日 `critical_gap_count == 0` (未達，當前 2,587)
+- [ ] Phase B (達標後 +7 日): Revoke Replit-side `GH_TOKEN`
+- [ ] Phase C (Phase B +30 日): Archive Replit project（保留 history）
+- [ ] Phase D (Phase C +90 日，兩個完整 season): Delete Replit project
+
+**緊急 fallback (如 GHA 追唔到 gap):** Replit VM 未刪，可手動 wake。但當前信心：
+- Pool A GHA 已接管 horse profile 層 → 應該 5-7 日內追晒 D-L 代 cohort
+- Race_daily 即將填 50 個 artefact gap (10 日 × 5)
+- Trainer_fix + jockey_fix 填 72 個 records gap
+- 冇發現 Replit 獨家數據源 (全部都 reuse Replit scraper script)
 
 ### C5 · Audit-driven sanity dashboard integration
 
