@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_DIRS = ["horses", "entries", "trials", "results", "jockeys", "trainers"]
+DATA_DIRS = ["horses", "entries", "trials", "results", "jockeys", "trainers", "data"]
 LAST_SYNC_FILE = "last_sync.json"
 GIT_USER_NAME = "天喜 Bot"
 GIT_USER_EMAIL = "bot@tianxi.ai"
