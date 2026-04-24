@@ -1,4 +1,4 @@
-name: Capy Sanity — Daily Status Dashboard
+name: Capy Sanity - Daily Status Dashboard
 
 # Polls all capy_* workflows and data commits for the last 24h, writes a
 # STATUS.md snapshot to main, and fails the job if any critical scraper has
@@ -8,8 +8,8 @@ name: Capy Sanity — Daily Status Dashboard
 
 on:
   schedule:
-    - cron: '3 2 * * *'      # HK 10:03 daily (off the minute mark)
-  workflow_dispatch: {}
+    - cron: '3 2 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
