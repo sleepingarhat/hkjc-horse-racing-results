@@ -1,6 +1,6 @@
 {
   "scan_date": "2026-04-24",
-  "repo_root": "/tmp/tianxi-work/repo",
+  "repo_root": "/home/runner/work/tianxi-database/tianxi-database",
   "overall_severity": "critical",
   "critical_gap_count": 2587,
   "warn_gap_count": 73,
