@@ -9,6 +9,8 @@ Output:
 """
 
 import os, re, time
+import argparse
+import zlib
 import logging
 from datetime import date
 import pandas as pd
@@ -23,6 +25,17 @@ from lifecycle_helper import (
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+# ── CLI: shard control for parallel GHA matrix runs ─────────────────────────
+# When --total-shards > 1, filter the horse_no set to only those matching
+# CRC32(horse_no) % total_shards == shard. Deterministic across runners
+# (unlike Python's hash() which is PYTHONHASHSEED-randomized).
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--shard", type=int, default=0,
+                 help="Shard index (0..total_shards-1) for matrix runs.")
+_ap.add_argument("--total-shards", type=int, default=1,
+                 help="Total shard count. 1 = no sharding (full pass).")
+_ARGS = _ap.parse_args()
 
 RESULTS_DIR  = "data"
 PROFILES_DIR = os.path.join("horses", "profiles")
@@ -59,6 +72,13 @@ for year in sorted(os.listdir(RESULTS_DIR)):
             print(f"  Error reading {fname}: {e}")
 
 print(f"Found {len(horse_nos)} unique horses.")
+
+# ── Shard filter (GHA matrix) — partition by CRC32(horse_no) ────────────────
+if _ARGS.total_shards > 1:
+    before = len(horse_nos)
+    horse_nos = {h for h in horse_nos
+                 if zlib.crc32(h.encode()) % _ARGS.total_shards == _ARGS.shard}
+    print(f"Shard {_ARGS.shard}/{_ARGS.total_shards}: filtered {before} → {len(horse_nos)} horses")
 
 # ── 2. Determine which horses still need scraping ───────────────────────────
 
