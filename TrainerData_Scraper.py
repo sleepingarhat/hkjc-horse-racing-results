@@ -78,8 +78,13 @@ if os.path.exists(profiles_file):
     except Exception as e:
         print(f"[trainer-dedup] skip: {e}")
 
-todo = [c for c in trainers if c not in done]
-print(f"Already done: {len(done)} | Remaining: {len(todo)}")
+todo = [
+    c for c in trainers
+    if c not in done
+    or not os.path.exists(os.path.join(RECORDS_DIR, f"trainer_{c}.csv"))
+]
+print(f"Profiles already scraped: {len(done)} | "
+      f"To process (missing profile OR missing records): {len(todo)}")
 
 # ── 2. Scrape ────────────────────────────────────────────────────────────────
 

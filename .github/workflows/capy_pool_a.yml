@@ -37,7 +37,7 @@ permissions:
 jobs:
   pool-a:
     runs-on: ubuntu-latest
-    timeout-minutes: 345  # Pool A first-pass can take many hours
+    timeout-minutes: 720  # 12h: first-pass covers ~1300 horses, ~20s each incl page load
     steps:
       - uses: actions/checkout@v4
         with:
