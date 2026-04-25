@@ -1,21 +1,21 @@
 name: Capy Pool A — Horse Profiles + Trackwork + Injury
 
-# Pool A = horse-heavy scrapers. Runs sequentially:
-#   HorseData_Scraper.py       — profiles + pedigree + form records
-#   HorseTrackwork_Scraper.py  — morning trackwork history
-#   HorseInjury_Scraper.py     — injury/retirement status (requests-based)
+# Matrix architecture (2026-04-25): splits the 3 scrapers across parallel
+# jobs, each with their own 6h GHA-hosted budget. HorseData + HorseTrackwork
+# are sharded across 4 partitions via CRC32(horse_no) so per-shard wallclock
+# drops below 2h.
 #
-# Cutover status: FULL CUTOVER as of 2026-04-24.
-# Replit VM confirmed stopped (last periodic-backup commit 2026-04-23 06:25 UTC,
-# silent >26h since). Date gate lifted — Pool A is now the sole owner of
-# horse profile / trackwork / injury scraping.
+# Replaces the single-job sequential design that consistently hit GHA's
+# hard 6-hour ubuntu-latest cap (the previous `timeout-minutes: 720` was
+# silently truncated to 360 by GitHub's policy).
 #
-# The daily cron runs at HK 04:00 (UTC 20:00), ~4 hours after race_daily completes,
-# so the lifecycle classifier sees fresh last_race_date values.
+# Jobs graph:
+#   guard -> horse-data[0..3] -+-> horse-trackwork[0..3] -+-> push
+#                              +-> horse-injury          -+
 #
-# Additional fixture-aware guard: skip Pool A unless yesterday was a race day
-# (Pool A depends on fresh last_race_date), saving GHA minutes on non-race-adjacent
-# days. Override via dispatch input `force=true`.
+# Cutover status: FULL CUTOVER as of 2026-04-24. Pool A is the sole owner
+# of horse profile / trackwork / injury scraping. Replit VM confirmed
+# stopped since 2026-04-23.
 
 on:
   schedule:
@@ -23,21 +23,50 @@ on:
   workflow_dispatch:
     inputs:
       skip_scrapers:
-        description: 'Comma-separated scrapers to skip (e.g. HorseTrackwork,HorseInjury)'
+        description: 'Skip list (HorseData,HorseTrackwork,HorseInjury)'
         required: false
         default: ''
       force:
-        description: 'Bypass cutover + fixture guards (true/false)'
+        description: 'Bypass fixture guard (true/false)'
         required: false
         default: 'false'
 
 permissions:
   contents: write
 
+env:
+  TOTAL_SHARDS: 4
+
 jobs:
-  pool-a:
+  guard:
     runs-on: ubuntu-latest
-    timeout-minutes: 720  # 12h: first-pass covers ~1300 horses, ~20s each incl page load
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - id: g
+        name: Fixture gate
+        run: |
+          FORCE="${{ github.event.inputs.force }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "force=true — bypassing fixture guard"
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            bash scripts/fixture_guard.sh --window 1 --direction past
+          fi
+
+  horse-data:
+    needs: guard
+    if: needs.guard.outputs.run == 'true' && !contains(github.event.inputs.skip_scrapers, 'HorseData')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,69 +74,176 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pre-flight - fixture guard (cutover gate removed 2026-04-24)
-        id: guard
-        run: |
-          FORCE="${{ github.event.inputs.force }}"
-
-          if [ "$FORCE" = "true" ]; then
-            echo "force=true - bypassing fixture guard"
-            echo "run=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Fixture-aware: run only if yesterday was a race day
-          bash scripts/fixture_guard.sh --window 1 --direction past
-
       - uses: actions/setup-python@v5
-        if: steps.guard.outputs.run == 'true'
         with:
           python-version: '3.12'
 
-      - name: Setup Chrome
+      - uses: browser-actions/setup-chrome@v1
         id: chrome
-        if: steps.guard.outputs.run == 'true'
-        uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
 
-      - name: Setup ChromeDriver
-        if: steps.guard.outputs.run == 'true'
-        uses: nanasess/setup-chromedriver@v2
+      - uses: nanasess/setup-chromedriver@v2
 
       - name: Export browser paths
-        if: steps.guard.outputs.run == 'true'
         run: |
           echo "CHROMIUM_PATH=${{ steps.chrome.outputs.chrome-path }}" >> $GITHUB_ENV
           echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
 
       - name: Install Python deps
-        if: steps.guard.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pool A scrapers
-        if: steps.guard.outputs.run == 'true'
+      - name: Run HorseData shard ${{ matrix.shard }}
         run: |
-          SKIP="${{ github.event.inputs.skip_scrapers }}"
-          for scraper in HorseData_Scraper.py HorseTrackwork_Scraper.py HorseInjury_Scraper.py; do
-            short=$(echo "$scraper" | sed 's/_Scraper\.py//')
-            if echo ",$SKIP," | grep -q ",$short,"; then
-              echo "::group::Skipping $scraper"
-              echo "  skipped by dispatch input"
-              echo "::endgroup::"
-              continue
-            fi
-            echo "::group::$scraper"
-            python "$scraper" || echo "  $scraper exited non-zero — continuing"
-            echo "::endgroup::"
-          done
+          python HorseData_Scraper.py \
+            --shard ${{ matrix.shard }} \
+            --total-shards ${{ env.TOTAL_SHARDS }} \
+            || echo "HorseData shard ${{ matrix.shard }} exited non-zero — uploading partial"
 
-      - name: Push Pool A data to main
-        if: steps.guard.outputs.run == 'true'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pool-a-horsedata-shard-${{ matrix.shard }}
+          path: |
+            horses/profiles/horse_profiles.csv
+            horses/form_records/
+            failed_horses.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  horse-trackwork:
+    needs: horse-data
+    if: always() && needs.horse-data.result != 'cancelled' && needs.horse-data.result != 'skipped' && !contains(github.event.inputs.skip_scrapers, 'HorseTrackwork')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download horse-data artefacts (for horse_profiles.csv)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pool-a-horsedata-shard-*
+          merge-multiple: true
+          path: .
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - uses: nanasess/setup-chromedriver@v2
+
+      - name: Export browser paths
+        run: |
+          echo "CHROMIUM_PATH=${{ steps.chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+          echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run HorseTrackwork shard ${{ matrix.shard }}
+        run: |
+          python HorseTrackwork_Scraper.py \
+            --shard ${{ matrix.shard }} \
+            --total-shards ${{ env.TOTAL_SHARDS }} \
+            || echo "HorseTrackwork shard ${{ matrix.shard }} exited non-zero — uploading partial"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pool-a-trackwork-shard-${{ matrix.shard }}
+          path: |
+            horses/trackwork/
+            failed_trackwork.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  horse-injury:
+    needs: horse-data
+    if: always() && needs.horse-data.result != 'cancelled' && needs.horse-data.result != 'skipped' && !contains(github.event.inputs.skip_scrapers, 'HorseInjury')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download horse-data artefacts (for horse_profiles.csv)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pool-a-horsedata-shard-*
+          merge-multiple: true
+          path: .
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run HorseInjury (requests-based, single job)
+        run: python HorseInjury_Scraper.py || echo "HorseInjury exited non-zero — uploading partial"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pool-a-injury
+          path: |
+            horses/injury/
+            failed_injury.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  push:
+    needs: [horse-data, horse-trackwork, horse-injury]
+    if: always() && (needs.horse-data.result == 'success' || needs.horse-trackwork.result == 'success' || needs.horse-injury.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install merge deps
+        run: pip install pandas
+
+      - name: Merge artefacts into working tree
+        run: python scripts/merge_pool_a_artifacts.py /tmp/artifacts
+
+      - name: Push merged data to main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python git_sync.py \
-            --message "[data][skip ci] pool-a $(date -u +%Y-%m-%dT%H:%MZ) via GHA"
+          python git_sync.py --message "pool-a $(date -u +%Y-%m-%dT%H:%MZ) via GHA matrix"
