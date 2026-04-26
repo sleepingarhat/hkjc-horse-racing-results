@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-04-25T05:59:03+00:00",
+  "generated_at": "2026-04-26T06:20:00+00:00",
   "generator": "tools/build_manifest.py",
-  "git_head": "9620e3e70f35fb864bd6370d202ea52833094248",
+  "git_head": "4b8a0cf2f9a1765fc4cdf11431067ad550d2e278",
   "repo": "sleepingarhat/tianxi-database",
   "branch": "main",
   "base_url": {
@@ -18,8 +18,8 @@
     "race_days": 894,
     "race_artefact_files": 4464,
     "fixtures_rows": 143,
-    "horse_form_files": 1899,
-    "horse_profile_rows": 1888,
+    "horse_form_files": 5933,
+    "horse_profile_rows": 5935,
     "jockey_record_files": 59,
     "jockey_profile_rows": 66,
     "trainer_profile_rows": 67,
@@ -89,12 +89,12 @@
     "horses": {
       "profiles": {
         "path": "horses/profiles/horse_profiles.csv",
-        "row_count": 1888
+        "row_count": 5935
       },
       "form_records": {
         "dir": "horses/form_records/",
         "path_template": "horses/form_records/form_{horse_id}.csv",
-        "count": 1899,
+        "count": 5933,
         "sample": [
           "form_A001.csv",
           "form_A002.csv",
@@ -174,11 +174,11 @@
   "integrity": {
     "latest_report": "audit_reports/integrity_latest.json",
     "raw_url": "https://raw.githubusercontent.com/sleepingarhat/tianxi-database/main/audit_reports/integrity_latest.json",
-    "scan_date": "2026-04-25",
+    "scan_date": "2026-04-26",
     "overall_severity": "critical",
-    "critical_gap_count": 2557,
-    "warn_gap_count": 73,
-    "recommendation": "replit_fallback_required"
+    "critical_gap_count": 1,
+    "warn_gap_count": 79,
+    "recommendation": "gha_next_delta_will_fix"
   },
   "policy": {
     "odds_weighting": "disabled (beta=0 hardcoded in win-probability model)",
