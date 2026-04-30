@@ -12,6 +12,16 @@ Dedup strategy for horse_profiles.csv:
   fresh checkouts — even when pandas sort ordering would otherwise pick
   a stale baseline row as "last".
 
+Per-horse file merge (2026-04-30 Bug D fix):
+  Each shard's artifact upload contains ALL ~5000 form/trackwork/injury
+  CSVs — most at baseline from the fresh checkout, only this shard's
+  ~50 horses actually updated. Old code (shutil.copy2 in rglob order)
+  would have a stale baseline from one shard overwrite a fresh update
+  from another. Fix: snapshot ROOT's baseline bytes FIRST, then during
+  merge skip any incoming artifact file whose contents byte-match the
+  baseline. Only non-baseline (= freshly-scraped by some shard) files
+  get copied through.
+
 Usage (run from repo root):
   python scripts/merge_pool_a_artifacts.py /tmp/artifacts
 """
@@ -31,18 +41,48 @@ def main(art_dir: str) -> int:
         return 1
 
     # ── 1. Copy per-horse CSVs (form_/trackwork_/injury_) ──────────────────
-    # These files are partitioned by horse_no so no cross-shard collision
-    # should occur. If one does (bug), the last-copy wins (benign).
+    # Snapshot baseline FIRST so we can skip stale baseline copies from
+    # shards that didn't touch a given horse. Only incoming files whose
+    # bytes differ from baseline are real updates and get copied through.
+    SUBDIRS = ("form_records", "trackwork", "injury")
+
+    baseline: dict[tuple[str, str], bytes] = {}
+    for subdir_name in SUBDIRS:
+        tgt = ROOT / "horses" / subdir_name
+        if tgt.is_dir():
+            for f in tgt.iterdir():
+                if f.is_file() and f.name != "_horseid_map.json":
+                    try:
+                        baseline[(subdir_name, f.name)] = f.read_bytes()
+                    except Exception as e:
+                        print(f"  baseline read failed {f}: {e}")
+    print(f"  baseline snapshot: {len(baseline)} files")
+
     copied = {"form_records": 0, "trackwork": 0, "injury": 0}
-    for subdir_name in ("form_records", "trackwork", "injury"):
+    skipped_baseline = {"form_records": 0, "trackwork": 0, "injury": 0}
+    for subdir_name in SUBDIRS:
         tgt = ROOT / "horses" / subdir_name
         tgt.mkdir(parents=True, exist_ok=True)
         for src in ART.rglob(f"horses/{subdir_name}/*"):
             if src.is_file() and src.name != "_horseid_map.json":
-                shutil.copy2(src, tgt / src.name)
+                try:
+                    incoming = src.read_bytes()
+                except Exception as e:
+                    print(f"  read failed {src}: {e}")
+                    continue
+                if baseline.get((subdir_name, src.name)) == incoming:
+                    # Stale baseline copy from a shard that didn't scrape
+                    # this horse. Skip so we don't overwrite a fresh
+                    # update already copied from the correct shard.
+                    skipped_baseline[subdir_name] += 1
+                    continue
+                (tgt / src.name).write_bytes(incoming)
                 copied[subdir_name] += 1
-    for k, n in copied.items():
-        print(f"  copied {n} files into horses/{k}/")
+    for k in SUBDIRS:
+        print(
+            f"  copied {copied[k]} files into horses/{k}/ "
+            f"(skipped {skipped_baseline[k]} stale-baseline)"
+        )
 
     # ── 2. Merge horse_profiles.csv shards ────────────────────────────────
     dfs = []
