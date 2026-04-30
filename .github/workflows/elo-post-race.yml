@@ -47,6 +47,14 @@ jobs:
         working-directory: .elo-pipeline
         run: npm ci --no-audit --no-fund
 
+      - name: Ingest CSVs into bulk-local.db
+        working-directory: .elo-pipeline
+        run: |
+          # Runner checks out fresh repo; bulk-local.db is not committed (too large).
+          # Re-build it from CSVs (profiles + form records are required for ELO compute).
+          npx tsx scripts/ingest/index.ts profiles form --data-dir=..
+          ls -la bulk-local.db
+
       - name: Resolve recompute window
         id: window
         run: |
