@@ -1,4 +1,5 @@
 ﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+G268,651,08,29/04/26,跑馬地,草地,C,1000,好,2,3,87,呂健威,楊明綸,5-1/4,18,117,8 7 8,0.57.65,1092,XB
 G268,532,02,18/03/26,跑馬地,草地,A,1200,好/快,2,5,86,呂健威,何澤堯,1,24,121,6 5 2,1.08.89,1097,XB
 G268,412,03,04/02/26,跑馬地,草地,C+3,1200,好/快,2,1,86,呂健威,何澤堯,2,7,119,5 6 3,1.08.97,1105,XB
 G268,352,03,14/01/26,跑馬地,草地,B,1200,好,2,5,85,呂健威,何澤堯,1-1/4,23,121,8 8 3,1.09.49,1111,XB

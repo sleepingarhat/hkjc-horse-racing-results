@@ -1,4 +1,5 @@
 ﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+G394,648,04,29/04/26,跑馬地,草地,C,1200,好/黏,4,6,41,徐雨石,巴度,1,31,117,2 2 4,1.10.41,1072,B/TT
 G394,616,08,19/04/26,沙田,草地,C+3,1000,好/快,4,1,43,徐雨石,楊明綸,3-1/4,31,118,13 10 8,0.56.79,1080,B/TT
 G394,528,05,18/03/26,跑馬地,草地,A,1000,好/快,4,3,45,徐雨石,田泰安,2-1/2,12,121,11 10 5,0.56.99,1064,B/TT
 G394,495,03,08/03/26,沙田,草地,C,1000,好,4,11,45,徐雨石,巴度,1-1/4,18,120,13 11 3,0.57.08,1056,B/TT
