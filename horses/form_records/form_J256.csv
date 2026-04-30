@@ -1,4 +1,5 @@
 ﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+J256,640,01,26/04/26,沙田,草地,A,1600,好/快,G1,10,121,廖康銘,布文,頸位,5.4,126,12 12 9 1,1.32.37,1011,XB
 J256,582,02,06/04/26,沙田,草地,B+2,1600,好,G2,4,118,廖康銘,布文,短馬頭位,3.1,123,10 10 7 2,1.33.67,1008,XB
 J256,481,04,01/03/26,沙田,草地,B+2,2000,好,G1,5,120,廖康銘,布文,5-1/2,13,126,6 6 6 6 4,2.00.64,1007,XB1
 J256,381,04,25/01/26,沙田,草地,A+3,1600,好/快,G1,2,122,廖康銘,巴度,3-1/2,5.9,126,2 4 5 4,1.33.18,1018,--

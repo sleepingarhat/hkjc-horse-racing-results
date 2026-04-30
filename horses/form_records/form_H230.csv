@@ -1,4 +1,5 @@
 ﻿horse_no,race_index,place,date,racecourse,track,course,distance_m,going,race_class,draw,rating,trainer,jockey,lbw,win_odds,actual_wt_lbs,running_position,finish_time,declared_wt_lbs,gear
+H230,650,11,29/04/26,跑馬地,草地,C,1650,好,4,8,45,姚本輝,田泰安,6-1/4,25,121,9 10 10 11,1.42.04,1132,V
 H230,588,11,08/04/26,跑馬地,草地,C+3,1650,好,4,12,46,姚本輝,田泰安,7,21,122,10 10 10 11,1.40.78,1138,V
 H230,508,03,11/03/26,跑馬地,草地,C+3,1650,好/快,4,8,45,姚本輝,田泰安,1/2,10,122,8 9 9 3,1.39.81,1139,V
 H230,402,09,01/02/26,沙田,草地,B+2,1400,好,4,2,47,姚本輝,蔡明紹,6-1/4,21,122,7 8 7 9,1.22.37,1157,V
