@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "generated_at": "2026-04-29T06:38:03+00:00",
+  "generated_at": "2026-04-30T06:42:04+00:00",
   "generator": "tools/build_manifest.py",
-  "git_head": "600a6975c0ae889c9c8934d69037cd17c969ffbc",
+  "git_head": "0c82c2a0fecba432689912288ab8f66188332e42",
   "repo": "sleepingarhat/tianxi-database",
   "branch": "main",
   "base_url": {
@@ -15,11 +15,11 @@
     "readme": "README.md"
   },
   "summary": {
-    "race_days": 894,
-    "race_artefact_files": 4464,
+    "race_days": 896,
+    "race_artefact_files": 4474,
     "fixtures_rows": 143,
-    "horse_form_files": 5933,
-    "horse_profile_rows": 5935,
+    "horse_form_files": 5945,
+    "horse_profile_rows": 5947,
     "jockey_record_files": 59,
     "jockey_profile_rows": 66,
     "trainer_profile_rows": 67,
@@ -49,16 +49,16 @@
       "path_template": "data/{year}/{kind}_{date}.csv",
       "raw_url_template": "https://raw.githubusercontent.com/sleepingarhat/tianxi-database/main/data/{year}/{kind}_{date}.csv",
       "count_by_kind": {
-        "results": 888,
-        "commentary": 894,
-        "dividends": 894,
-        "sectional": 894,
-        "video": 894
+        "results": 890,
+        "commentary": 896,
+        "dividends": 896,
+        "sectional": 896,
+        "video": 896
       },
-      "distinct_race_days": 894,
+      "distinct_race_days": 896,
       "date_range": {
         "start": "2016-01-01",
-        "end": "2026-04-22"
+        "end": "2026-04-29"
       },
       "season_years": [
         2016,
@@ -74,7 +74,7 @@
         2026
       ],
       "example": {
-        "results": "data/2026/results_2026-04-22.csv"
+        "results": "data/2026/results_2026-04-29.csv"
       }
     },
     "fixtures": {
@@ -90,12 +90,12 @@
     "horses": {
       "profiles": {
         "path": "horses/profiles/horse_profiles.csv",
-        "row_count": 5935
+        "row_count": 5947
       },
       "form_records": {
         "dir": "horses/form_records/",
         "path_template": "horses/form_records/form_{horse_id}.csv",
-        "count": 5933,
+        "count": 5945,
         "sample": [
           "form_A001.csv",
           "form_A002.csv",
@@ -175,10 +175,10 @@
   "integrity": {
     "latest_report": "audit_reports/integrity_latest.json",
     "raw_url": "https://raw.githubusercontent.com/sleepingarhat/tianxi-database/main/audit_reports/integrity_latest.json",
-    "scan_date": "2026-04-29",
+    "scan_date": "2026-04-30",
     "overall_severity": "critical",
-    "critical_gap_count": 11,
-    "warn_gap_count": 75,
+    "critical_gap_count": 1,
+    "warn_gap_count": 74,
     "recommendation": "gha_next_delta_will_fix"
   },
   "policy": {
