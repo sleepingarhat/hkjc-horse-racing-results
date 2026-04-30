@@ -1,10 +1,12 @@
 name: ELO Post-Race Auto-Update
 
-# Fires automatically after Capy Race Day successfully commits new results CSVs.
-# Recomputes ELO v12 (time-weighted multi-axis) snapshots through the latest
-# race date and writes reconcile.db snapshots back into the repo.
+# Fires automatically after Capy Race Day commits new results CSVs.
+# 1. Ingest HKJC CSVs (profiles + form) into scratch bulk-local.db
+# 2. Run ELO v12 compute → horse/jockey/trainer_elo_snapshots
+# 3. Generate delta SQL chunks via push-delta.ts (include=elo)
+# 4. Push chunks to Cloudflare D1 via wrangler d1 execute
 #
-# Also supports manual dispatch for backfill scenarios.
+# Also supports manual dispatch for backfill.
 
 on:
   workflow_run:
@@ -14,100 +16,153 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Recompute from (YYYY-MM-DD, optional)'
+        description: 'Push ELO snapshots from (YYYY-MM-DD, blank = 14d back)'
         required: false
         type: string
       force_full_recompute:
-        description: 'Force full recompute from earliest data'
+        description: 'Full recompute + push from 2016'
         required: false
         default: 'false'
         type: choice
         options: [ 'false', 'true' ]
 
+permissions:
+  contents: read
+
 jobs:
   elo-update:
-    # Only run if the upstream workflow succeeded (avoid running on silent failures).
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout tianxi-database (CSV source)
+        uses: actions/checkout@v4
         with:
-          ref: main
+          path: tianxi-database
           fetch-depth: 1
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout tianxi-backend (push-delta.ts)
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-backend
+          path: tianxi-backend
+          token: ${{ secrets.TIANXI_BACKEND_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
+      - name: Resolve --since window
+        id: resolve
+        run: |
+          set -eu
+          if [ "${{ inputs.force_full_recompute }}" = "true" ]; then
+            echo "since=2016-01-01" >> $GITHUB_OUTPUT
+            echo "mode=full" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.start_date }}" ]; then
+            echo "since=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
+            echo "mode=since" >> $GITHUB_OUTPUT
+          else
+            S=$(TZ=Asia/Hong_Kong date -d "today -14 days" +%Y-%m-%d)
+            echo "since=$S" >> $GITHUB_OUTPUT
+            echo "mode=incremental" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install ELO pipeline deps
-        working-directory: .elo-pipeline
+        working-directory: tianxi-database/.elo-pipeline
+        run: npm ci --no-audit --no-fund
+
+      - name: Install tianxi-backend deps
+        working-directory: tianxi-backend
         run: npm ci --no-audit --no-fund
 
       - name: Ingest CSVs into bulk-local.db
-        working-directory: .elo-pipeline
+        working-directory: tianxi-database/.elo-pipeline
         run: |
-          # Runner checks out fresh repo; bulk-local.db is not committed (too large).
-          # Re-build it from CSVs (profiles + form records are required for ELO compute).
           npx tsx scripts/ingest/index.ts profiles form --data-dir=..
           ls -la bulk-local.db
 
-      - name: Resolve recompute window
-        id: window
-        run: |
-          if [ "${{ inputs.force_full_recompute }}" = "true" ]; then
-            echo "mode=full" >> $GITHUB_OUTPUT
-            echo "since=" >> $GITHUB_OUTPUT
-          elif [ -n "${{ inputs.start_date }}" ]; then
-            echo "mode=since" >> $GITHUB_OUTPUT
-            echo "since=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
-          else
-            # Incremental: last commit that touched reconcile.db
-            LAST=$(git log -1 --format=%cs -- .elo-pipeline/data/reconcile.db 2>/dev/null || echo "")
-            echo "mode=incremental" >> $GITHUB_OUTPUT
-            echo "since=${LAST}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Run ELO v12 compute
-        working-directory: .elo-pipeline
+        working-directory: tianxi-database/.elo-pipeline
         env:
-          ELO_MODE: ${{ steps.window.outputs.mode }}
-          ELO_SINCE: ${{ steps.window.outputs.since }}
+          ELO_SINCE: ${{ steps.resolve.outputs.since }}
+          ELO_MODE: ${{ steps.resolve.outputs.mode }}
         run: |
           if [ "$ELO_MODE" = "full" ]; then
             npx tsx scripts/elo/compute.ts --engine v12 --full
           else
-            npx tsx scripts/elo/compute.ts --engine v12 ${ELO_SINCE:+--since "$ELO_SINCE"}
+            npx tsx scripts/elo/compute.ts --engine v12 --since "$ELO_SINCE"
           fi
 
-      - name: Sanity check reconcile.db
-        run: |
-          if [ ! -s .elo-pipeline/data/reconcile.db ]; then
-            echo "::error::reconcile.db is empty or missing after compute"
-            exit 1
-          fi
-          ls -la .elo-pipeline/data/reconcile.db
-
-      - name: Commit reconcile.db snapshot
+      - name: Verify ELO snapshots in bulk-local.db
+        working-directory: tianxi-database/.elo-pipeline
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELO_SINCE: ${{ steps.resolve.outputs.since }}
         run: |
-          git config user.name "capy-bot"
-          git config user.email "capy-bot@users.noreply.github.com"
-          git add .elo-pipeline/data/reconcile.db
-          if git diff --cached --quiet; then
-            echo "No ELO snapshot change."
-          else
-            git commit -m "[elo][skip ci] v12 recompute $(date -u +%Y-%m-%dT%H:%MZ) (mode=${{ steps.window.outputs.mode }})"
-            git push origin main
-          fi
+          node -e "
+            const Database = require('better-sqlite3');
+            const db = new Database('./bulk-local.db', { readonly: true });
+            const since = process.env.ELO_SINCE;
+            const h = db.prepare('SELECT COUNT(*) AS n, MAX(as_of_date) AS max_d FROM horse_elo_snapshots WHERE as_of_date >= ?').get(since);
+            const j = db.prepare('SELECT COUNT(*) AS n, MAX(as_of_date) AS max_d FROM jockey_elo_snapshots WHERE as_of_date >= ?').get(since);
+            const t = db.prepare('SELECT COUNT(*) AS n, MAX(as_of_date) AS max_d FROM trainer_elo_snapshots WHERE as_of_date >= ?').get(since);
+            console.log('horse snapshots  :', h);
+            console.log('jockey snapshots :', j);
+            console.log('trainer snapshots:', t);
+            if (h.n === 0) { console.error('::error::No horse ELO snapshots since ' + since); process.exit(1); }
+          "
 
-      - name: Trigger D1 ingest
-        if: success()
+      - name: Generate ELO delta SQL chunks
+        working-directory: tianxi-backend
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SINCE: ${{ steps.resolve.outputs.since }}
         run: |
-          gh workflow run d1-incremental-ingest.yml --ref main || echo "Follow-up ingest dispatch failed (non-fatal)"
+          set -eu
+          rm -rf /tmp/d1-delta
+          npx tsx scripts/push-delta.ts \
+            --db=../tianxi-database/.elo-pipeline/bulk-local.db \
+            --since="$SINCE" \
+            --include=elo \
+            --out=/tmp/d1-delta
+          ls -la /tmp/d1-delta/ | head -40 || echo "(no chunks)"
+
+      - name: Install wrangler
+        run: npm install -g wrangler@4
+
+      - name: Push ELO delta to D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: tianxi-backend
+        run: |
+          set -eu
+          # FK-parent-first order for ELO snapshots
+          ORDER=(horses jockeys trainers horse_elo_snapshots jockey_elo_snapshots trainer_elo_snapshots)
+          FAILED=0
+          for t in "${ORDER[@]}"; do
+            for f in /tmp/d1-delta/${t}-*.sql; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              if wrangler d1 execute tianxi-db --remote --file="$f" >/tmp/out.log 2>&1; then
+                echo "OK  $base"
+              else
+                echo "FAIL $base"
+                tail -20 /tmp/out.log
+                FAILED=1
+              fi
+            done
+          done
+          if [ "$FAILED" -eq 1 ]; then exit 1; fi
+
+      - name: Verify D1 ELO snapshots post-push
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -eu
+          wrangler d1 execute tianxi-db --remote \
+            --command="SELECT 'horse' AS axis, COUNT(*) AS rows, MAX(as_of_date) AS max_d FROM horse_elo_snapshots UNION ALL SELECT 'jockey', COUNT(*), MAX(as_of_date) FROM jockey_elo_snapshots UNION ALL SELECT 'trainer', COUNT(*), MAX(as_of_date) FROM trainer_elo_snapshots" \
+            --json | tail -40
