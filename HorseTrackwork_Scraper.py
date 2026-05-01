@@ -17,13 +17,23 @@ import argparse
 import zlib
 import logging
 import pandas as pd
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
-from scraper_utils import make_driver, load_page, safe_cell, log_failed, parse_zh_location
+import requests
+from io import StringIO
+from scraper_utils import log_failed
 from comeback_detection import should_scrape
 from lifecycle_helper import compute_last_race_dates, load_horse_state, load_today_entries
+
+# Proper browser UA — HKJC sniffs "HeadlessChrome" and serves JS-shell page
+# without data rows when detected. Matching Chrome on Linux bypasses this.
+TRACKWORK_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+)
+TRACKWORK_HEADERS = {
+    "User-Agent": TRACKWORK_UA,
+    "Accept-Language": "zh-HK,zh;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -171,99 +181,92 @@ if not todo:
     print("All horses already scraped.")
     exit(0)
 
-# ── 2. Scrape ───────────────────────────────────────────────────────────────
-
-driver = make_driver()
+# ── 2. Scrape (requests-based — bypass Selenium UA sniff) ──────────────────
+# HKJC's bot detection flags `HeadlessChrome` UA and returns a JS-shell page
+# with zero data rows. Selenium patches (UA spoof, webdriver flag override)
+# helped intermittently. Direct HTTPS fetch with a real Chrome UA is
+# deterministic: verified locally returning 5-col trackwork tables for
+# L918/L920 via pd.read_html.
 
 TRACKWORK_COLS = [
     "horse_no", "date", "work_type",
     "racecourse", "track", "workout_details", "gear"
 ]
 
+SESSION = requests.Session()
+SESSION.headers.update(TRACKWORK_HEADERS)
+
+
+def fetch_trackwork_tables(horse_no, retries=3, backoff=2):
+    """Fetch TrackworkResult page and parse all tables. Returns list of
+    DataFrames or None on failure."""
+    url = TRACKWORK_DIRECT_URL.format(horse_no=horse_no)
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = SESSION.get(url, timeout=20)
+            r.raise_for_status()
+            return pd.read_html(StringIO(r.text))
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(backoff * attempt)
+    print(f"  fetch failed after {retries} attempts: {last_err}")
+    return None
+
+
+def pick_trackwork_table(tables):
+    """Match by expected column set:
+       日期 / 晨操類別 / 馬場/跑道 / 操練詳情 / 配備
+    Returns the DataFrame or None."""
+    wanted = {"日期", "晨操類別", "操練詳情"}
+    for t in tables:
+        cols = {str(c).strip() for c in t.columns}
+        if wanted.issubset(cols):
+            return t
+    # Fallback: sometimes the header row is row 0 instead of column names.
+    for t in tables:
+        if t.shape[0] > 0 and t.shape[1] >= 5:
+            first_row = {str(v).strip() for v in t.iloc[0].tolist()}
+            if wanted.issubset(first_row):
+                # Promote row 0 to header
+                new_df = t.iloc[1:].copy()
+                new_df.columns = [str(v).strip() for v in t.iloc[0].tolist()]
+                return new_df
+    return None
+
+
 for i, horse_no in enumerate(todo, 1):
     print(f"\n[{i}/{len(todo)}] Horse: {horse_no}")
     out_file = os.path.join(TRACKWORK_DIR, f"trackwork_{horse_no}.csv")
 
-    # Strategy 1: direct URL (skip JS race on profile page). The legacy
-    # Chinese TrackworkResult.aspx accepts HorseNo directly; no client-side
-    # link construction required.
-    trackwork_url = TRACKWORK_DIRECT_URL.format(horse_no=horse_no)
-    if not load_page(driver, trackwork_url):
-        # Strategy 2: fall back to profile-page navigation (original path)
-        # in case HKJC ever removes the direct route. Use WebDriverWait
-        # instead of a flaky time.sleep(1) — wait up to 8 s for the JS
-        # `setLevadeNav()` to inject the trackwork <a> into the DOM.
-        profile_url = BASE_HORSE_URL.format(horse_no=horse_no)
-        if not load_page(driver, profile_url):
-            log_failed(FAILED_LOG, horse_no, "profile page load failed")
-            continue
+    tables = fetch_trackwork_tables(horse_no)
+    if tables is None:
+        log_failed(FAILED_LOG, horse_no, "fetch failed")
+        continue
 
-        trackwork_url = None
-        try:
-            link_el = WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((
-                    By.XPATH, "//a[contains(@href,'trackworkresult') or contains(@href,'TrackworkResult')]"
-                ))
-            )
-            href = link_el.get_attribute("href") or ""
-            if href:
-                trackwork_url = href
-        except TimeoutException:
-            # Final fallback: regex-scrape page source (matches late-injected hrefs).
-            src = driver.page_source
-            m = re.search(r'href="([^"]*[Tt]rackwork[Rr]esult[^"]+)"', src)
-            if m:
-                href = m.group(1)
-                trackwork_url = href if href.startswith("http") else "https://racing.hkjc.com" + href
-
-        if not trackwork_url:
-            print(f"  No trackwork URL found for {horse_no}")
-            log_failed(FAILED_LOG, horse_no, "no trackwork URL")
-            pd.DataFrame(columns=TRACKWORK_COLS).to_csv(out_file, index=False, encoding="utf-8-sig")
-            continue
-
-        if not load_page(driver, trackwork_url):
-            log_failed(FAILED_LOG, horse_no, "trackwork page load failed")
-            continue
-
-    # Wait for the data table itself (any page path). 6 s covers slow first
-    # paint without blocking throughput on already-cached pages.
-    try:
-        WebDriverWait(driver, 6).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-    except TimeoutException:
-        pass
-
-    tables = driver.find_elements(By.TAG_NAME, "table")
-    trackwork_table = None
-    for t in tables:
-        rows = t.find_elements(By.TAG_NAME, "tr")
-        if rows and ("日期" in rows[0].text or "操練類型" in rows[0].text or "Date" in rows[0].text):
-            trackwork_table = t
-            break
-
-    if not trackwork_table:
-        print(f"  No trackwork table found")
-        log_failed(FAILED_LOG, horse_no, "no trackwork table")
+    table = pick_trackwork_table(tables)
+    if table is None:
+        print(f"  No trackwork table found (horse may have no training records)")
         pd.DataFrame(columns=TRACKWORK_COLS).to_csv(out_file, index=False, encoding="utf-8-sig")
         continue
 
-    rows = trackwork_table.find_elements(By.TAG_NAME, "tr")
     records = []
-    for row in rows[1:]:
-        cells = row.find_elements(By.TAG_NAME, "td")
-        if len(cells) < 3:
+    for _, row in table.iterrows():
+        date_val = str(row.get("日期", "")).strip()
+        if not re.match(r"\d{2}/\d{2}/\d{4}", date_val):
             continue
-        date_val = safe_cell(cells, 0)
-        if not date_val or not re.match(r"\d{2}/\d{2}/\d{4}", date_val):
-            continue
-        work_type    = safe_cell(cells, 1)
-        # Racecourse / Track split from cell 2
-        location_raw = safe_cell(cells, 2)
-        loc_parts    = location_raw.split(" ", 2)
+        work_type    = str(row.get("晨操類別", "")).strip()
+        location_raw = str(row.get("馬場/跑道", "")).strip()
+        loc_parts    = location_raw.split(" ", 1)
         racecourse   = loc_parts[0] if loc_parts else ""
         track        = loc_parts[1] if len(loc_parts) > 1 else ""
-        workout_det  = safe_cell(cells, 3)
-        gear         = safe_cell(cells, 4)
+        workout_det  = str(row.get("操練詳情", "")).strip()
+        gear         = str(row.get("配備", "")).strip()
+        # Normalize pandas NaN literal
+        for v in ("nan", "NaN", "None"):
+            if workout_det == v: workout_det = ""
+            if gear == v: gear = ""
 
         records.append({
             "horse_no":        horse_no,
@@ -282,5 +285,7 @@ for i, horse_no in enumerate(todo, 1):
         print(f"  No trackwork records found")
         pd.DataFrame(columns=TRACKWORK_COLS).to_csv(out_file, index=False, encoding="utf-8-sig")
 
-driver.quit()
+    # Polite throttle — HKJC occasionally rate-limits rapid sequential fetches.
+    time.sleep(0.3)
+
 print("\nHorse trackwork scraping complete!")
