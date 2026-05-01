@@ -1,0 +1,117 @@
+name: Capy D1 Sync Entries — forward-looking racecards
+
+# After capy_entries.yml commits fresh entries_<date>.txt files, this workflow
+# ingests them into a scratch sqlite, then pushes the entries_upcoming delta
+# to Cloudflare D1 so home page / next-race-day logic can surface upcoming
+# meetings before the post-race scraper backfills full results.
+#
+# Triggered automatically when capy_entries completes. Also supports
+# workflow_dispatch with explicit --since window.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Lookback YYYY-MM-DD (rows with race_date >= this value; blank = today)'
+        required: false
+        default: ''
+  workflow_run:
+    workflows: ['Capy Entries — Race Card (排位表)']
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sync-entries:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout tianxi-database (entries txt source)
+        uses: actions/checkout@v4
+        with:
+          path: tianxi-database
+          fetch-depth: 1
+
+      - name: Checkout tianxi-backend (ingest + push scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-backend
+          path: tianxi-backend
+          token: ${{ secrets.TIANXI_BACKEND_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Resolve --since window
+        id: resolve
+        run: |
+          set -eu
+          S="${{ github.event.inputs.since }}"
+          if [ -z "$S" ]; then
+            # Default: today (entries are forward-dated, so today catches all upcoming)
+            S=$(TZ=Asia/Hong_Kong date +%Y-%m-%d)
+          fi
+          echo "since=$S" >> $GITHUB_OUTPUT
+          echo "Resolved --since=$S"
+
+      - name: Install tianxi-backend deps
+        working-directory: tianxi-backend
+        run: npm ci --no-audit --no-fund
+
+      - name: Ingest entries source
+        working-directory: tianxi-backend
+        run: |
+          set -eu
+          rm -f bulk-local.db
+          npx tsx scripts/ingest/index.ts \
+            entries \
+            --data-dir=../tianxi-database \
+            --db=bulk-local.db
+
+      - name: Generate entries delta SQL chunks
+        working-directory: tianxi-backend
+        env:
+          SINCE: ${{ steps.resolve.outputs.since }}
+        run: |
+          set -eu
+          rm -rf /tmp/d1-delta
+          npx tsx scripts/push-delta.ts \
+            --db=bulk-local.db \
+            --since="$SINCE" \
+            --include=entries \
+            --out=/tmp/d1-delta
+          ls -la /tmp/d1-delta/ | head -30 || echo "(no chunks)"
+
+      - name: Install wrangler
+        run: npm install -g wrangler@4
+
+      - name: Push entries delta to D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: tianxi-backend
+        run: |
+          set -eu
+          FAILED=0
+          # race_meetings may also be seeded by entries ingest (non-destructive upsert)
+          for t in race_meetings entries_upcoming; do
+            for f in /tmp/d1-delta/${t}-*.sql; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              if wrangler d1 execute tianxi-db --remote --file="$f" >/tmp/out.log 2>&1; then
+                echo "OK  $base"
+              else
+                echo "FAIL $base"
+                tail -20 /tmp/out.log
+                FAILED=1
+              fi
+            done
+          done
+          if [ "$FAILED" -eq 1 ]; then exit 1; fi
