@@ -28,7 +28,7 @@ jobs:
 
       - name: Pre-flight — fixture guard (tomorrow is race day?)
         id: guard
-        run: bash scripts/fixture_guard.sh --window 1 --direction future
+        run: bash scripts/fixture_guard.sh --window 3 --direction future
 
       - uses: actions/setup-python@v5
         if: steps.guard.outputs.run == 'true'
