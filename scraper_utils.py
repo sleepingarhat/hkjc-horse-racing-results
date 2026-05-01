@@ -20,6 +20,17 @@ CHROMEDRIVER_PATH = os.environ.get(
 MAX_RETRIES = 3
 PAGE_TIMEOUT = 30
 
+# UA spoof — HKJC serves a JS-shell (0 data rows) when it sees `HeadlessChrome/`
+# in the UA. Stripping that substring and presenting a vanilla desktop Chrome UA
+# gets us the full server-rendered page. Verified 2026-05-01:
+#   curl -A "Mozilla/5.0 HeadlessChrome/147.0.0.0" -L <trackwork_url>  → ~4 日期 matches (shell only)
+#   curl -A "Mozilla/5.0"                          -L <trackwork_url>  → 1086 data rows
+# This restored ~1000 empty trackwork CSVs that had been stuck at 65B header-only.
+SPOOF_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+)
+
 
 def make_driver():
     opts = webdriver.ChromeOptions()
@@ -28,12 +39,30 @@ def make_driver():
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
+    # Anti-bot avoidance: override default UA (hides HeadlessChrome signal) +
+    # disable the `AutomationControlled` blink feature which sets
+    # navigator.webdriver=true. Both are standard detection signals.
+    opts.add_argument(f"--user-agent={SPOOF_UA}")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
     opts.binary_location = CHROMIUM_PATH
     from selenium.webdriver.chrome.service import Service as ChromeService
-    return webdriver.Chrome(
+    driver = webdriver.Chrome(
         service=ChromeService(executable_path=CHROMEDRIVER_PATH),
         options=opts
     )
+    # Post-init: clobber navigator.webdriver via CDP for extra safety against
+    # JS-side detection. Covers servers that check `navigator.webdriver` after
+    # page load rather than just the UA string.
+    try:
+        driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"},
+        )
+    except Exception:
+        pass
+    return driver
 
 
 def load_page(driver, url, timeout=PAGE_TIMEOUT, retries=MAX_RETRIES):
