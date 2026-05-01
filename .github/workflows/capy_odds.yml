@@ -1,0 +1,144 @@
+name: Capy Odds — live snapshot (hkjc-api GraphQL)
+
+# Live odds + pool-total snapshot scraper using the hkjc-api npm GraphQL
+# wrapper. Appends one time-series row per (race, pool, combination,
+# snapshot_at) to local sqlite, then pushes the odds delta to Cloudflare D1.
+#
+# Schedule: every 10 min during HK racing betting window (roughly
+# 09:00–23:00 HKT). HKJC publishes odds starting ~3 days out for reserves
+# and liquid pools lock at race start. Snapshot frequency chosen to balance
+# D1 row growth vs OHLC granularity (10 min ≈ 144 snapshots/day × ~8 races
+# × ~14 horses × 6 pools ≈ 100k rows/race-day, acceptable).
+
+on:
+  workflow_dispatch:
+    inputs:
+      pools:
+        description: 'Comma-separated pool types (WIN,PLA,QIN,QPL,FCT,TRI,FF,...). Blank = defaults.'
+        required: false
+        default: ''
+      since:
+        description: 'D1 push lookback YYYY-MM-DD (blank = today HKT)'
+        required: false
+        default: ''
+  schedule:
+    # Every 10 minutes. Fixture guard + no-meeting short-circuit inside the
+    # job makes this cheap when there is no active meeting.
+    - cron: '*/10 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capy-odds
+  cancel-in-progress: false
+
+jobs:
+  snapshot-odds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout tianxi-backend (scraper + push scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-backend
+          token: ${{ secrets.TIANXI_BACKEND_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps (hkjc-api + better-sqlite3)
+        run: npm ci --no-audit --no-fund
+
+      - name: Ensure odds schema exists in local scratch db
+        run: |
+          set -eu
+          rm -f bulk-local.db
+          # Apply only the odds schema — other tables are not needed for odds-only push.
+          node -e "
+            const Database = require('better-sqlite3');
+            const fs = require('fs');
+            const db = new Database('bulk-local.db');
+            db.exec(fs.readFileSync('src/db/schema_odds.sql', 'utf8'));
+            console.log('odds schema applied to bulk-local.db');
+          "
+
+      - name: Scrape current-meeting odds
+        id: scrape
+        env:
+          POOLS: ${{ github.event.inputs.pools }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          POOLS_ARG=""
+          if [ -n "$POOLS" ]; then POOLS_ARG="--pools=$POOLS"; fi
+          set +e
+          npx tsx scripts/scrape-odds.ts --db=bulk-local.db $POOLS_ARG > /tmp/scrape.json 2> /tmp/scrape.err
+          RC=$?
+          set -e
+          cat /tmp/scrape.err || true
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::scrape-odds exited $RC — likely no active meeting; skipping push"
+            echo "has_data=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          ROWS=$(node -e "try{const j=JSON.parse(require('fs').readFileSync('/tmp/scrape.json','utf8'));console.log((j.oddsRowsWritten||0)+(j.poolTotalRowsWritten||0));}catch(e){console.log(0);}")
+          echo "rows=$ROWS" >> $GITHUB_OUTPUT
+          if [ "$ROWS" = "0" ]; then
+            echo "has_data=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_data=true" >> $GITHUB_OUTPUT
+          fi
+          cat /tmp/scrape.json || true
+
+      - name: Resolve --since
+        if: steps.scrape.outputs.has_data == 'true'
+        id: resolve
+        run: |
+          set -eu
+          S="${{ github.event.inputs.since }}"
+          if [ -z "$S" ]; then S=$(TZ=Asia/Hong_Kong date +%Y-%m-%d); fi
+          echo "since=$S" >> $GITHUB_OUTPUT
+
+      - name: Generate odds delta chunks
+        if: steps.scrape.outputs.has_data == 'true'
+        env:
+          SINCE: ${{ steps.resolve.outputs.since }}
+        run: |
+          set -eu
+          rm -rf /tmp/d1-delta
+          npx tsx scripts/push-delta.ts \
+            --db=bulk-local.db \
+            --since="$SINCE" \
+            --include=odds \
+            --out=/tmp/d1-delta
+          ls -la /tmp/d1-delta/ | head -20 || echo "(no chunks)"
+
+      - name: Install wrangler
+        if: steps.scrape.outputs.has_data == 'true'
+        run: npm install -g wrangler@4
+
+      - name: Push odds delta to D1
+        if: steps.scrape.outputs.has_data == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -eu
+          FAILED=0
+          for t in odds_snapshots pool_totals; do
+            for f in /tmp/d1-delta/${t}-*.sql; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              if wrangler d1 execute tianxi-db --remote --file="$f" >/tmp/out.log 2>&1; then
+                echo "OK  $base"
+              else
+                echo "FAIL $base"
+                tail -20 /tmp/out.log
+                FAILED=1
+              fi
+            done
+          done
+          if [ "$FAILED" -eq 1 ]; then exit 1; fi
