@@ -1,0 +1,116 @@
+name: Capy D1 Bulk Backfill — year-level historical ingest
+
+# One-shot bulk ingest for a full year or date range. Used to backfill
+# historical D1 gaps where CSVs exist but were never pushed.
+#
+# Usage (workflow_dispatch):
+#   year: 2020       # ingest all data/2020/*.csv
+#   since: 2020-09-01  # push-delta filters rows >= this date
+#
+# Pushes: horses, jockeys, trainers, race_meetings, races, race_results,
+# running_comments, dividends, horse_elo_snapshots (if generated).
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Year to ingest (e.g. 2020)'
+        required: true
+        default: '2020'
+      since:
+        description: 'push-delta --since YYYY-MM-DD (blank = YEAR-01-01)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tianxi-database (CSV source)
+        uses: actions/checkout@v4
+        with:
+          path: tianxi-database
+          fetch-depth: 1
+
+      - name: Checkout tianxi-backend (ingest + push scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-backend
+          path: tianxi-backend
+          token: ${{ secrets.TIANXI_BACKEND_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Resolve inputs
+        id: resolve
+        run: |
+          set -eu
+          YEAR="${{ github.event.inputs.year }}"
+          SINCE="${{ github.event.inputs.since }}"
+          if [ -z "$SINCE" ]; then
+            SINCE="${YEAR}-01-01"
+          fi
+          echo "year=$YEAR" >> $GITHUB_OUTPUT
+          echo "since=$SINCE" >> $GITHUB_OUTPUT
+          echo "Resolved year=$YEAR since=$SINCE"
+
+      - name: Install tianxi-backend deps
+        working-directory: tianxi-backend
+        run: npm install --no-audit --no-fund
+
+      - name: Ingest full year CSVs
+        working-directory: tianxi-backend
+        env:
+          YEAR: ${{ steps.resolve.outputs.year }}
+        run: |
+          set -eu
+          rm -f bulk-local.db
+          npx tsx scripts/import-csv.ts \
+            --data-dir ../tianxi-database/data \
+            --db bulk-local.db \
+            --year "$YEAR"
+
+      - name: Generate delta SQL chunks
+        working-directory: tianxi-backend
+        env:
+          SINCE: ${{ steps.resolve.outputs.since }}
+        run: |
+          set -eu
+          rm -rf /tmp/d1-delta
+          npx tsx scripts/push-delta.ts \
+            --db=bulk-local.db \
+            --since="$SINCE" \
+            --include=race \
+            --out=/tmp/d1-delta
+          ls -la /tmp/d1-delta/ | head -50
+
+      - name: Install wrangler
+        run: npm install -g wrangler@4
+
+      - name: Push delta to D1 (FK-parent-first order)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: tianxi-backend
+        run: |
+          set -eu
+          ORDER=(horses jockeys trainers race_meetings races race_results running_comments dividends horse_elo_snapshots jockey_elo_snapshots trainer_elo_snapshots)
+          FAILED=0
+          for t in "${ORDER[@]}"; do
+            for f in /tmp/d1-delta/${t}-*.sql; do
+              [ -f "$f" ] || continue
+              echo "==> $f"
+              if ! wrangler d1 execute tianxi-db --remote --file "$f"; then
+                echo "::warning::$f failed; continuing"
+                FAILED=$((FAILED+1))
+              fi
+            done
+          done
+          echo "failed chunks: $FAILED"
