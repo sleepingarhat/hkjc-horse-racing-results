@@ -18,7 +18,9 @@ import zlib
 import logging
 import pandas as pd
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from scraper_utils import make_driver, load_page, safe_cell, log_failed, parse_zh_location
 from comeback_detection import should_scrape
 from lifecycle_helper import compute_last_race_dates, load_horse_state, load_today_entries
@@ -41,6 +43,42 @@ FAILED_LOG    = "failed_trackwork.log"
 BASE_HORSE_URL = "https://racing.hkjc.com/racing/information/Chinese/Horse/Horse.aspx?HorseNo={horse_no}"
 
 os.makedirs(TRACKWORK_DIR, exist_ok=True)
+
+# Direct trackwork URL constructor — bypasses the profile-page navigation
+# entirely when we know the birth year. HKJC's legacy Chinese page generates
+# the link only after `setLevadeNav()` fires post-load, so a naive
+# time.sleep(1) was racing the JS on ~90% of runs → empty CSVs.
+#   Expected format: HK_<4-digit birth year>_<horse_no>
+# Source: mobile endpoint returns the same table HTML as the legacy route.
+TRACKWORK_DIRECT_URL = (
+    "https://racing.hkjc.com/racing/information/Chinese/Horse/"
+    "TrackworkResult.aspx?HorseNo={horse_no}"
+)
+
+def build_horse_birth_year_map():
+    """Map horse_no → birth year (int) from horse_profiles.csv. Tolerant of
+    missing columns; returns {} so callers can fall back to DOM scraping."""
+    if not os.path.exists(PROFILES_FILE):
+        return {}
+    try:
+        df = pd.read_csv(PROFILES_FILE, encoding="utf-8-sig")
+        # Column names have drifted over past scrapes; probe several spellings.
+        for col in ("birth_year", "foaling_year", "year_of_birth", "出生年份"):
+            if col in df.columns and "horse_no" in df.columns:
+                m = {}
+                for _, row in df[["horse_no", col]].dropna().iterrows():
+                    try:
+                        m[str(row["horse_no"]).strip()] = int(str(row[col])[:4])
+                    except Exception:
+                        pass
+                if m:
+                    return m
+    except Exception as e:
+        print(f"  (birth-year map unavailable: {e})")
+    return {}
+
+_BIRTH_YEAR_MAP = build_horse_birth_year_map()
+print(f"Birth-year map loaded: {len(_BIRTH_YEAR_MAP)} horses")
 
 # ── 1. Collect unique horse numbers ─────────────────────────────────────────
 
@@ -128,47 +166,54 @@ for i, horse_no in enumerate(todo, 1):
     print(f"\n[{i}/{len(todo)}] Horse: {horse_no}")
     out_file = os.path.join(TRACKWORK_DIR, f"trackwork_{horse_no}.csv")
 
-    # Load horse profile to find the trackwork link
-    profile_url = BASE_HORSE_URL.format(horse_no=horse_no)
-    if not load_page(driver, profile_url):
-        log_failed(FAILED_LOG, horse_no, "profile page load failed")
-        continue
-    time.sleep(1)
-
-    # Try to find a trackwork link on the page (either in tabs or in source)
-    trackwork_url = None
-    try:
-        links = driver.find_elements(
-            By.XPATH,
-            "//a[contains(@href,'trackworkresult') or contains(translate(text(),'TRACKWORK','trackwork'),'trackwork')]"
-        )
-        for l in links:
-            href = l.get_attribute("href") or ""
-            if "trackworkresult" in href:
-                trackwork_url = href
-                break
-    except Exception:
-        pass
-
-    if not trackwork_url:
-        # Try extracting from page source directly
-        src = driver.page_source
-        m = re.search(r'href="([^"]*trackworkresult\?horseid=[^"]+)"', src)
-        if m:
-            trackwork_url = "https://racing.hkjc.com" + m.group(1) if m.group(1).startswith("/") else m.group(1)
-
-    if not trackwork_url:
-        print(f"  No trackwork URL found for {horse_no}")
-        log_failed(FAILED_LOG, horse_no, "no trackwork URL")
-        # Still save an empty file to avoid re-checking
-        pd.DataFrame(columns=TRACKWORK_COLS).to_csv(out_file, index=False, encoding="utf-8-sig")
-        continue
-
-    print(f"  Trackwork URL: {trackwork_url}")
+    # Strategy 1: direct URL (skip JS race on profile page). The legacy
+    # Chinese TrackworkResult.aspx accepts HorseNo directly; no client-side
+    # link construction required.
+    trackwork_url = TRACKWORK_DIRECT_URL.format(horse_no=horse_no)
     if not load_page(driver, trackwork_url):
-        log_failed(FAILED_LOG, horse_no, "trackwork page load failed")
-        continue
-    time.sleep(1)
+        # Strategy 2: fall back to profile-page navigation (original path)
+        # in case HKJC ever removes the direct route. Use WebDriverWait
+        # instead of a flaky time.sleep(1) — wait up to 8 s for the JS
+        # `setLevadeNav()` to inject the trackwork <a> into the DOM.
+        profile_url = BASE_HORSE_URL.format(horse_no=horse_no)
+        if not load_page(driver, profile_url):
+            log_failed(FAILED_LOG, horse_no, "profile page load failed")
+            continue
+
+        trackwork_url = None
+        try:
+            link_el = WebDriverWait(driver, 8).until(
+                EC.presence_of_element_located((
+                    By.XPATH, "//a[contains(@href,'trackworkresult') or contains(@href,'TrackworkResult')]"
+                ))
+            )
+            href = link_el.get_attribute("href") or ""
+            if href:
+                trackwork_url = href
+        except TimeoutException:
+            # Final fallback: regex-scrape page source (matches late-injected hrefs).
+            src = driver.page_source
+            m = re.search(r'href="([^"]*[Tt]rackwork[Rr]esult[^"]+)"', src)
+            if m:
+                href = m.group(1)
+                trackwork_url = href if href.startswith("http") else "https://racing.hkjc.com" + href
+
+        if not trackwork_url:
+            print(f"  No trackwork URL found for {horse_no}")
+            log_failed(FAILED_LOG, horse_no, "no trackwork URL")
+            pd.DataFrame(columns=TRACKWORK_COLS).to_csv(out_file, index=False, encoding="utf-8-sig")
+            continue
+
+        if not load_page(driver, trackwork_url):
+            log_failed(FAILED_LOG, horse_no, "trackwork page load failed")
+            continue
+
+    # Wait for the data table itself (any page path). 6 s covers slow first
+    # paint without blocking throughput on already-cached pages.
+    try:
+        WebDriverWait(driver, 6).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+    except TimeoutException:
+        pass
 
     tables = driver.find_elements(By.TAG_NAME, "table")
     trackwork_table = None
