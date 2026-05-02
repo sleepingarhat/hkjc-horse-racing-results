@@ -1,7 +1,7 @@
 name: Capy Trainer Scraper
 
-# Runs TrainerData_Scraper.py (fixes Replit's D1 silent-fail bug).
-# Writes trainers/trainer_profiles.csv + trainers/records/<TID>.csv.
+# Runs TrainerData_Scraper.py (requests-based, no Selenium).
+# Writes trainers/records/<TID>.csv using trainerpastrec SSR pages.
 
 on:
   schedule:
@@ -46,23 +46,6 @@ jobs:
         if: steps.guard.outputs.run == 'true'
         with:
           python-version: '3.12'
-
-      - name: Setup Chrome
-        id: chrome
-        if: steps.guard.outputs.run == 'true'
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-
-      - name: Setup ChromeDriver
-        if: steps.guard.outputs.run == 'true'
-        uses: nanasess/setup-chromedriver@v2
-
-      - name: Export browser paths
-        if: steps.guard.outputs.run == 'true'
-        run: |
-          echo "CHROMIUM_PATH=${{ steps.chrome.outputs.chrome-path }}" >> $GITHUB_ENV
-          echo "CHROMEDRIVER_PATH=$(which chromedriver)" >> $GITHUB_ENV
 
       - name: Install Python deps
         if: steps.guard.outputs.run == 'true'
