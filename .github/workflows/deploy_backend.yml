@@ -1,0 +1,35 @@
+name: Deploy tianxi-backend to Cloudflare Workers
+
+# Deploys the Hono API worker from sleepingarhat/tianxi-backend.
+# Uses CF credentials from this repo's secrets.
+
+on:
+  workflow_dispatch:
+  # Also re-deploy when a push to tianxi-backend triggers via repository_dispatch
+  # (or just run manually after backend code changes)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out tianxi-backend
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-backend
+          token: ${{ secrets.TIANXI_BACKEND_PAT }}
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
