@@ -255,7 +255,7 @@ def audit_jockey_profiles(repo: Path, today: date) -> CategoryResult:
     for fdate, f in _iter_result_rows(repo / "data", since):
         for row in _read_csv_rows(f):
             j = (row.get("jockey") or "").strip()
-            if j and j != "-":
+            if j and j.strip("-") and j != "-":
                 recent_jockeys.add(j)
     prof_rows = _read_csv_rows(repo / "jockeys" / "jockey_profiles.csv")
     profile_names = {(r_.get("jockey_name") or "").strip() for r_ in prof_rows}
@@ -300,7 +300,7 @@ def audit_trainer_profiles(repo: Path, today: date) -> CategoryResult:
     for fdate, f in _iter_result_rows(repo / "data", since):
         for row in _read_csv_rows(f):
             t = (row.get("trainer") or "").strip()
-            if t and t != "-":
+            if t and t.strip("-") and t != "-":
                 recent_trainers.add(t)
     prof_rows = _read_csv_rows(repo / "trainers" / "trainer_profiles.csv")
     profile_names = {(r_.get("trainer_name") or "").strip() for r_ in prof_rows}
