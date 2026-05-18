@@ -1,44 +1,36 @@
 name: Deploy tianxi-site to Cloudflare Pages
 
-  on:
-    workflow_dispatch:
-      inputs:
-        ref:
-          description: 'tianxi-site git ref to deploy (default: main)'
-          required: false
-          default: 'main'
-        project:
-          description: 'CF Pages project name'
-          required: false
-          default: 'tianxi-site'
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: tianxi-site git ref to deploy
+        required: false
+        default: main
+      project:
+        description: CF Pages project name
+        required: false
+        default: tianxi-site
 
-  jobs:
-    deploy:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Checkout tianxi-site
-          uses: actions/checkout@v4
-          with:
-            repository: sleepingarhat/tianxi-site
-            ref: ${{ github.event.inputs.ref }}
-            path: site
-
-        - name: Setup Node
-          uses: actions/setup-node@v4
-          with:
-            node-version: '20'
-
-        - name: Install wrangler
-          run: npm install -g wrangler@latest
-
-        - name: Deploy to Cloudflare Pages
-          env:
-            CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-            CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          run: |
-            cd site
-            wrangler pages deploy . \
-              --project-name="${{ github.event.inputs.project }}" \
-              --branch=main \
-              --commit-dirty=true
-  
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tianxi-site
+        uses: actions/checkout@v4
+        with:
+          repository: sleepingarhat/tianxi-site
+          ref: ${{ github.event.inputs.ref }}
+          path: site
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install wrangler
+        run: npm install -g wrangler@latest
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: site
+        run: wrangler pages deploy . --project-name="${{ github.event.inputs.project }}" --branch=main --commit-dirty=true
